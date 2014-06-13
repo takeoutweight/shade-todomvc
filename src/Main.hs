@@ -9,11 +9,10 @@ import Control.Applicative
 import Control.Concurrent.MVar
 import Control.Monad.Cont
 import Haste hiding (toString, fromString, onEvent)
-import Shade.Core.Internal.Core
-import qualified Shade.Core.Internal.Events as E
-import Shade.Haste.Internal.React (React)
-import Shade.Haste.Internal.Core
-import qualified Shade.Core.Internal.Attributes as S
+import Shade.Core
+import qualified Shade.Core.Events as E
+import qualified Shade.Core.Attributes as S
+import Shade.Haste (React, runClient, renderClient, listen)
 import Haste.Foreign
 import Haste.JSON
 import Haste.Prim
