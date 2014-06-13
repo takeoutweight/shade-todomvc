@@ -1,16 +1,19 @@
 {-# LANGUAGE NoMonomorphismRestriction, ExistentialQuantification, FlexibleInstances, MultiParamTypeClasses, GeneralizedNewtypeDeriving, RankNTypes, FlexibleContexts, TypeFamilies, ConstraintKinds #-}
 module Main where
 import Data.List hiding (span)
+import Data.Maybe (catMaybes)
 import Data.Monoid hiding ((<>))
+import Data.String (IsString, fromString)
 import qualified Data.Traversable as T
 import Control.Applicative
 import Control.Concurrent.MVar
 import Control.Monad.Cont
-import Haste hiding (onEvent)
-import React
-import React.Stubs (React, MouseEvent)
-import qualified React.Stubs as S
-import React.FFIHelpers
+import Haste hiding (toString, fromString, onEvent)
+import Shade.Core.Internal.Core
+import qualified Shade.Core.Internal.Events as E
+import Shade.Haste.Internal.React (React)
+import Shade.Haste.Internal.Core
+import qualified Shade.Core.Internal.Attributes as S
 import Haste.Foreign
 import Haste.JSON
 import Haste.Prim
@@ -51,41 +54,40 @@ enterKey = 13 :: Int
 escapeKey = 27 :: Int
 
 data TodoItemStructure r = 
-  TodoItemStructure { editTodoItem :: Async r (Maybe TodoItem)
+  TodoItemStructure { editTodoItem :: Async r (Maybe (TodoItem r))
                     }
 
-todoItem :: (RTree r) => TodoItem -> r (TodoItemStructure r)
+todoItem :: (Shade r) => (TodoItem r) -> r (TodoItemStructure r)
 todoItem ti = 
-  do (toggleAsync, toggle) <- letElt (input [S.className "toggle"
+  do (toggleAsync, toggle) <- letElt (input [S.className ["toggle"]
                                             ,S.typeInfo "checkbox"
                                             ,S.checked (completed ti)])
      (nameLabelAsync, nameLabel) <- letElt (label [] (text (taskName ti)))
-     (destroyAsync, destroy) <- letElt (button [S.className "destroy"] (return ()))
-     (editFieldAsync, editField) <- letElt (input [S.className "edit"
-                                                  ,S.value (editName ti)])
-     let rnd = (li [S.className ((if (completed ti) then "completed " else "")
-                                 ++ (if (editing ti) then "editing" else ""))]
-                        (do (div [S.className "view"]
+     (destroyAsync, destroy) <- letElt (button [S.className ["destroy"]] (return ()))
+     (editFieldAsync, editField) <- letElt (input [S.className ["edit"],S.value (editName ti)])
+     let rnd = (li [S.className (catMaybes [(if (completed ti) then Just "completed " else Nothing)
+                                           ,(if (editing ti) then Just "editing" else Nothing)])]
+                        (do (div [S.className ["view"]]
                              (do toggle
                                  nameLabel
                                  destroy))
                             editField))
      let startEdit = (fmap (const (Just (ti {editing = True
-                                            ,editName = (toJSStr (taskName ti))}))) (onDoubleClick nameLabelAsync))
-     let doEdit = (fmap (\s -> (Just (ti {editName = (S.changeEventValue s)}))) (onChange editFieldAsync))
+                                            ,editName = (fromString (taskName ti))}))) (onDoubleClick nameLabelAsync))
+     let doEdit = (fmap (\s -> (Just (ti {editName = (E.changeEventValue s)}))) (onChange editFieldAsync))
      let doneEdit = fireFirst [(fmap (const True) (onBlur editFieldAsync))
-                              ,(fmap (\ke -> (S.which ke) == enterKey) (onKeyDown editFieldAsync))]
+                              ,(fmap (\ke -> (E.which ke) == enterKey) (onKeyDown editFieldAsync))]
      -- FIXME this 2nd fmap makes us quite slow.
-     let cancelEdit = (fmap (\ke -> if (((S.which ke) == escapeKey) && ((editing ti) == True))
+     let cancelEdit = (fmap (\ke -> if (((E.which ke) == escapeKey) && ((editing ti) == True))
                                     then Just (ti {editing = False
-                                                  ,editName = toJSStr ""})
+                                                  ,editName = fromString ""})
                                     else Just ti)
                        (onKeyDown editFieldAsync))
      let submitTask = fmap (\de -> if (de && ((editing ti) == True))
-                                   then (if ((length (fromJSStr (editName ti))) > 0)
+                                   then (if ((length (toString (editName ti))) > 0)
                                          then (Just (ti {editing = False
-                                                        ,editName = toJSStr ""
-                                                        ,taskName = (fromJSStr (editName ti))}))
+                                                        ,editName = fromString ""
+                                                        ,taskName = (toString (editName ti))}))
                                          else Nothing)
                                    else (Just ti)) doneEdit
      let destroyTask = (fmap (const Nothing) (onClick destroyAsync))
@@ -95,17 +97,17 @@ todoItem ti =
 
 taskNames tvm = map taskName (todoItems tvm)
 
-defaultTask :: String -> TodoItem
-defaultTask n = TodoItem n (toJSStr "") False False
-defaultTaskViewModel :: [String] -> TaskViewModel
-defaultTaskViewModel tNames = TaskViewModel (map defaultTask tNames) (toJSStr "") AllTodos
+defaultTask :: (Shade r) => String -> (TodoItem r)
+defaultTask n = TodoItem n (fromString "") False False
+defaultTaskViewModel :: (Shade r) => [String] -> (TaskViewModel r)
+defaultTaskViewModel tNames = TaskViewModel (map defaultTask tNames) (fromString "") AllTodos
 
 data FooterStructure r =
   FooterStructure { nextFilter :: Async r TodoFilter
                   , clearCompleted :: Async r ()
                   }
 
-todoFooter :: (RTree r) => Int -> Int -> TodoFilter -> r (FooterStructure r)
+todoFooter :: (Shade r) => Int -> Int -> TodoFilter -> r (FooterStructure r)
 todoFooter totalCount activeCount todoFilter =
   do let completedCount = (totalCount - activeCount)
      (clearButtonAsync, clearButton) <- letElt (button [S.idName "clear-completed"]
@@ -131,13 +133,13 @@ todoFooter totalCount activeCount todoFilter =
   where
     filterItem name filter curFilter = li [] (a [S.href ("#/" ++ name)
                                                 ,S.className (if filter == curFilter
-                                                              then "selected"
-                                                              else "")]
+                                                              then ["selected"]
+                                                              else [])]
                                                 (text name))
 
 data TodoAppStructure r e a =
   TodoAppStructure { editCommand :: Async r (Maybe (e ([a] -> [a])))
-                   , newTaskInputChange :: Async r JSString
+                   , newTaskInputChange :: Async r (NativeString r)
                    , todoNextFilter :: Async r TodoFilter
                    , todoClearCompleted :: Async r ()
                    }
@@ -147,18 +149,18 @@ data TodoAppStructure r e a =
 
 
 data TodoFilter = Active | Completed | AllTodos deriving (Show, Eq)
-data TodoItem = TodoItem { taskName :: !String
-                         , editName :: !JSString
-                         , completed :: !Bool
-                         , editing :: !Bool
-                         } deriving (Show)
-data TaskViewModel = TaskViewModel { todoItems :: ![TodoItem]
-                                   , _newTaskInput :: !JSString
-                                   , todoFilter :: !TodoFilter
-                                   } deriving (Show)
+data TodoItem r = TodoItem { taskName :: !String
+                           , editName :: !(NativeString r)
+                           , completed :: !Bool
+                           , editing :: !Bool
+                           } -- deriving (Show)
+data TaskViewModel r = TaskViewModel { todoItems :: ![(TodoItem r)]
+                                     , _newTaskInput :: !(NativeString r)
+                                     , todoFilter :: !TodoFilter
+                                     } -- deriving (Show)
 
 
-todoApp :: (ListEdit e TodoItem, RTree r) => TaskViewModel -> r (TodoAppStructure r e TodoItem)
+todoApp :: (ListEdit e (TodoItem r), Shade r) => (TaskViewModel r) -> r (TodoAppStructure r e (TodoItem r))
 todoApp tvm =
   do let shown = filter (tFilt (todoFilter tvm)) (todoItems tvm)
      let totalCount = (length (todoItems tvm))
@@ -184,14 +186,14 @@ todoApp tvm =
                    inp
                    main
                    tfooter))
-     let newTask = (fmap (insertCmd (fromJSStr (_newTaskInput tvm))) (onKeyDown inpAsync))
+     let newTask = (fmap (insertCmd (toString (_newTaskInput tvm))) (onKeyDown inpAsync))
      let edits0 = map (\(idx, as) -> (fmap (\e -> (idx,e)) as)) (zip [0..] (map (editTodoItem . fst) todos))
      let edits = map (fmap (\(idx,e) -> case e of
                                 Just item -> Just (setAt idx item)
                                 Nothing -> Just (deleteAt idx))) edits0
      return (TodoAppStructure 
              (fireFirst (newTask : edits)) --(fireFirst [newTask, edits])
-             (fmap S.changeEventValue (onChange inpAsync))
+             (fmap E.changeEventValue (onChange inpAsync))
              (nextFilter theFooterAsync)
              (clearCompleted theFooterAsync))
   where
@@ -199,7 +201,7 @@ todoApp tvm =
     tFilt Completed td = (completed td)
     tFilt Active td = not (completed td)
     insertCmd taskVal evt
-      | (S.which evt) == enterKey = Just (insertAt 0 (defaultTask taskVal))
+      | (E.which evt) == enterKey = Just (insertAt 0 (defaultTask taskVal))
       | otherwise = Nothing
 
 todoAppInstall e =
