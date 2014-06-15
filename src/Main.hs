@@ -1,24 +1,19 @@
-{-# LANGUAGE NoMonomorphismRestriction, ExistentialQuantification, FlexibleInstances, MultiParamTypeClasses, GeneralizedNewtypeDeriving, RankNTypes, FlexibleContexts, TypeFamilies, ConstraintKinds #-}
+{-# LANGUAGE FlexibleContexts, FlexibleInstances, MultiParamTypeClasses #-}
 module Main where
 import Data.List hiding (span)
 import Data.Maybe (catMaybes)
-import Data.Monoid hiding ((<>))
 import Data.String (IsString, fromString)
-import qualified Data.Traversable as T
-import Control.Applicative
 import Control.Concurrent.MVar
-import Control.Monad.Cont
 import Haste hiding (toString, fromString, onEvent)
 import Shade.Core
 import qualified Shade.Core.Events as E
 import qualified Shade.Core.Attributes as S
-import Shade.Haste (React, runClient, renderClient, listen)
-import Haste.Foreign
-import Haste.JSON
-import Haste.Prim
+import Shade.Haste (React, ShadeHaste, runClient, renderClient, listen)
+import Haste.Prim (toJSStr)
 import Prelude hiding (div, span)
-import System.IO.Unsafe
-import Unsafe.Coerce
+
+-- Example use of tagless-final for async values too.
+-- edit instructions can be interpreted in various ways
 
 class ListEdit e a where
   insertAt :: Int -> a -> e ([a] -> [a])
@@ -31,24 +26,26 @@ instance ListEdit ListEditUnit a where
   setAt n i = ListEditUnit
   deleteAt n = ListEditUnit
 
-newtype ListEditImpl a = ListEditImpl {unListEditImpl :: a}
+newtype ListEditImpl a = ListEditImpl {listEdit :: a}
 instance ListEdit ListEditImpl i where
   insertAt n item = ListEditImpl $ \xs -> let (ys, zs) = splitAt n xs in ys ++ [item] ++ zs
   setAt n item = ListEditImpl $ \xs -> let (ys, zs) = splitAt n xs in ys ++ [item] ++ (tail zs)
   deleteAt n = ListEditImpl $ \xs -> let (ys, zs) = splitAt n xs in ys ++ (tail zs)
 
-newtype ListEditShow a = ListEditShow {unListEditShow :: String}
+newtype ListEditShow a = ListEditShow {listEditShow :: String}
 instance (Show i) => ListEdit ListEditShow i where
   insertAt n item = ListEditShow $ "insertAt(" ++ show n ++ "," ++ show item ++ ")"
   setAt n item = ListEditShow $ "setAt(" ++ show n ++ "," ++ show item ++ ")"
   deleteAt n = ListEditShow $ "deleteAt(" ++ show n ++ ")"
 
-newtype ListEditDup r1 r2 a = ListEditDup {unListEditDup :: (r1 a, r2 a)}
+newtype ListEditDup r1 r2 a = ListEditDup {listEditDup :: (r1 a, r2 a)}
 instance (ListEdit r1 a, ListEdit r2 a) => ListEdit (ListEditDup r1 r2) a where
   insertAt n i = ListEditDup (insertAt n i, insertAt n i)
   setAt n i = ListEditDup (setAt n i, setAt n i)
   deleteAt n = ListEditDup (deleteAt n, deleteAt n)
-  
+
+
+
 enterKey = 13 :: Int
 escapeKey = 27 :: Int
 
@@ -64,19 +61,11 @@ todoItem ti =
      (nameLabelAsync, nameLabel) <- letElt (label [] (text (taskName ti)))
      (destroyAsync, destroy) <- letElt (button [S.className ["destroy"]] (return ()))
      (editFieldAsync, editField) <- letElt (input [S.className ["edit"],S.value (editName ti)])
-     let rnd = (li [S.className (catMaybes [(if (completed ti) then Just "completed " else Nothing)
-                                           ,(if (editing ti) then Just "editing" else Nothing)])]
-                        (do (div [S.className ["view"]]
-                             (do toggle
-                                 nameLabel
-                                 destroy))
-                            editField))
      let startEdit = (fmap (const (Just (ti {editing = True
                                             ,editName = (fromString (taskName ti))}))) (onDoubleClick nameLabelAsync))
      let doEdit = (fmap (\s -> (Just (ti {editName = (E.changeEventValue s)}))) (onChange editFieldAsync))
      let doneEdit = fireFirst [(fmap (const True) (onBlur editFieldAsync))
                               ,(fmap (\ke -> (E.which ke) == enterKey) (onKeyDown editFieldAsync))]
-     -- FIXME this 2nd fmap makes us quite slow.
      let cancelEdit = (fmap (\ke -> if (((E.which ke) == escapeKey) && ((editing ti) == True))
                                     then Just (ti {editing = False
                                                   ,editName = fromString ""})
@@ -91,7 +80,13 @@ todoItem ti =
                                    else (Just ti)) doneEdit
      let destroyTask = (fmap (const Nothing) (onClick destroyAsync))
      let toggleDone = (fmap (\e -> (Just (ti {completed = not (completed ti)}))) (onChange toggleAsync))
-     rnd
+     li [S.className (catMaybes [(if (completed ti) then Just "completed " else Nothing)
+                                ,(if (editing ti) then Just "editing" else Nothing)])]
+       (do div [S.className ["view"]]
+             (do toggle
+                 nameLabel
+                 destroy)
+           editField)
      return (TodoItemStructure (fireFirst [startEdit, doEdit, submitTask, destroyTask, toggleDone]))
 
 taskNames tvm = map taskName (todoItems tvm)
@@ -143,10 +138,6 @@ data TodoAppStructure r e a =
                    , todoClearCompleted :: Async r ()
                    }
 
-
-
-
-
 data TodoFilter = Active | Completed | AllTodos deriving (Show, Eq)
 data TodoItem r = TodoItem { taskName :: !String
                            , editName :: !(NativeString r)
@@ -191,14 +182,14 @@ todoApp tvm =
                                 Just item -> Just (setAt idx item)
                                 Nothing -> Just (deleteAt idx))) edits0
      return (TodoAppStructure 
-             (fireFirst (newTask : edits)) --(fireFirst [newTask, edits])
+             (fireFirst (newTask : edits))
              (fmap E.changeEventValue (onChange inpAsync))
              (nextFilter theFooterAsync)
              (clearCompleted theFooterAsync))
   where
-    tFilt AllTodos td = True 
+    tFilt AllTodos  td = True 
     tFilt Completed td = (completed td)
-    tFilt Active td = not (completed td)
+    tFilt Active    td = not (completed td)
     insertCmd taskVal evt
       | (E.which evt) == enterKey = Just (insertAt 0 (defaultTask taskVal))
       | otherwise = Nothing
@@ -210,30 +201,20 @@ todoAppInstall e =
     doRender mv =
       do tvm <- readMVar mv
          (struct, tda) <- runClient (todoApp tvm)
-         listen (editCommand struct) (doEditCommand mv)
-         listen (newTaskInputChange struct) (newTaskEdit mv)
-         listen (todoNextFilter struct) (switchFilter mv)
-         listen (todoClearCompleted struct) (clearCompleted mv)
+         listen (editCommand struct) (update mv doEditCommand)
+         listen (newTaskInputChange struct) (update mv newTaskEdit)
+         listen (todoNextFilter struct) (update mv switchFilter)
+         listen (todoClearCompleted struct) (update mv clearCompleted)
          renderClient e tda
-    doEditCommand mv Nothing = return ()
-    doEditCommand mv (Just ec) =
-      do old <- readMVar mv
-         swapMVar mv (old {todoItems = ((unListEditImpl ec) (todoItems old))
-                          ,_newTaskInput = toJSStr ""})
-         doRender mv
-    newTaskEdit mv val = 
-      do old <- readMVar mv
-         swapMVar mv (old {_newTaskInput = val})
-         doRender mv
-    switchFilter mv val =
-      do old <- readMVar mv
-         swapMVar mv (old {todoFilter = val})
-         doRender mv
-    clearCompleted mv _ = 
-      do old <- readMVar mv
-         let items = filter (not . completed) (todoItems old)
-         swapMVar mv (old {todoItems = items})
-         doRender mv
+    doEditCommand Nothing  o = o
+    doEditCommand (Just n) o = (o {todoItems = ((listEdit n) (todoItems o))
+                                  ,_newTaskInput = toJSStr ""})
+    newTaskEdit    n o = (o {_newTaskInput = n})
+    switchFilter   n o = (o {todoFilter    = n})
+    clearCompleted _ o = let n = filter (not . completed) (todoItems o)
+                         in (o {todoItems = n})
+    update :: MVar (TaskViewModel ShadeHaste) -> (n -> (TaskViewModel ShadeHaste) -> (TaskViewModel ShadeHaste)) -> n -> IO ()
+    update mv fn n = modifyMVar_ mv (return . (fn n)) >> doRender mv         
 
 main :: IO ()
 main = do
