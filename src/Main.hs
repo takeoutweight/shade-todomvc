@@ -80,13 +80,13 @@ todoItem ti =
                                    else (Just ti)) doneEdit
      let destroyTask = (fmap (const Nothing) (onClick destroyAsync))
      let toggleDone = (fmap (\e -> (Just (ti {completed = not (completed ti)}))) (onChange toggleAsync))
-     li [S.className (catMaybes [(if (completed ti) then Just "completed " else Nothing)
-                                ,(if (editing ti) then Just "editing" else Nothing)])]
-       (do div [S.className ["view"]]
+     (li [S.className (catMaybes [(if (completed ti) then Just "completed " else Nothing)
+                                  ,(if (editing ti) then Just "editing" else Nothing)])]
+         (do div [S.className ["view"]]
              (do toggle
                  nameLabel
-                 destroy)
-           editField)
+              destroy)
+             editField))
      return (TodoItemStructure (fireFirst [startEdit, doEdit, submitTask, destroyTask, toggleDone]))
 
 taskNames tvm = map taskName (todoItems tvm)
