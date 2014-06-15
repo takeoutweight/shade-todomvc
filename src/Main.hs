@@ -83,9 +83,9 @@ todoItem ti =
      (li [S.className (catMaybes [(if (completed ti) then Just "completed " else Nothing)
                                   ,(if (editing ti) then Just "editing" else Nothing)])]
          (do div [S.className ["view"]]
-             (do toggle
-                 nameLabel
-              destroy)
+                 (do toggle
+                     nameLabel
+                     destroy)
              editField))
      return (TodoItemStructure (fireFirst [startEdit, doEdit, submitTask, destroyTask, toggleDone]))
 
