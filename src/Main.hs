@@ -53,6 +53,12 @@ data TodoItemStructure r =
   TodoItemStructure { editTodoItem :: Async r (Maybe (TodoItem r))
                     }
 
+data TodoItem r = TodoItem { taskName :: !String
+                           , editName :: !(NativeString r)
+                           , completed :: !Bool
+                           , editing :: !Bool
+                           } -- deriving (Show)                  
+
 todoItem :: (Shade r) => (TodoItem r) -> r (TodoItemStructure r)
 todoItem ti = 
   do (toggleAsync, toggle) <- letElt (input [S.className ["toggle"]
@@ -89,12 +95,6 @@ todoItem ti =
              editField))
      return (TodoItemStructure (fireFirst [startEdit, doEdit, submitTask, destroyTask, toggleDone]))
 
-taskNames tvm = map taskName (todoItems tvm)
-
-defaultTask :: (Shade r) => String -> (TodoItem r)
-defaultTask n = TodoItem n (fromString "") False False
-defaultTaskViewModel :: (Shade r) => [String] -> (TaskViewModel r)
-defaultTaskViewModel tNames = TaskViewModel (map defaultTask tNames) (fromString "") AllTodos
 
 data FooterStructure r =
   FooterStructure { nextFilter :: Async r TodoFilter
@@ -139,11 +139,6 @@ data TodoAppStructure r e a =
                    }
 
 data TodoFilter = Active | Completed | AllTodos deriving (Show, Eq)
-data TodoItem r = TodoItem { taskName :: !String
-                           , editName :: !(NativeString r)
-                           , completed :: !Bool
-                           , editing :: !Bool
-                           } -- deriving (Show)
 data TaskViewModel r = TaskViewModel { todoItems :: ![(TodoItem r)]
                                      , _newTaskInput :: !(NativeString r)
                                      , todoFilter :: !TodoFilter
@@ -193,6 +188,11 @@ todoApp tvm =
     insertCmd taskVal evt
       | (E.which evt) == enterKey = Just (insertAt 0 (defaultTask taskVal))
       | otherwise = Nothing
+
+defaultTask :: (Shade r) => String -> (TodoItem r)
+defaultTask n = TodoItem n (fromString "") False False
+defaultTaskViewModel :: (Shade r) => [String] -> (TaskViewModel r)
+defaultTaskViewModel tNames = TaskViewModel (map defaultTask tNames) (fromString "") AllTodos
 
 todoAppInstall e =
   do mv <- newMVar (defaultTaskViewModel ["firstthing", "secondthing"])
